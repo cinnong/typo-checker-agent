@@ -193,6 +193,3 @@ Model Groq yang tersedia (gratis):
 
 ---
 
-## 📄 Lisensi
-
-Proyek ini dibuat untuk keperluan pembelajaran. Silakan digunakan dan dimodifikasi sesuai kebutuhan.

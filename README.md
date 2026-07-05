@@ -20,8 +20,9 @@ Program berbasis Python yang menggunakan **Groq API** untuk memeriksa dan memper
 
 ```
 typo-checker-agent/
-├── app.py        ← Program utama
-└── README.md     ← Dokumentasi ini
+├── app.py            ← Program utama
+├── requirements.txt  ← Daftar dependensi
+└── README.md         ← Dokumentasi ini
 ```
 
 ---
@@ -48,7 +49,7 @@ cd typo-checker-agent
 ### 2. Instal dependensi
 
 ```bash
-pip install groq
+pip install -r requirements.txt
 ```
 
 > **Opsional:** gunakan virtual environment agar dependensi terisolasi.
@@ -64,7 +65,7 @@ pip install groq
 > # Linux / macOS
 > source venv/bin/activate
 >
-> pip install groq
+> pip install -r requirements.txt
 > ```
 
 ### 3. Dapatkan Groq API Key (Gratis)

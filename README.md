@@ -1,4 +1,4 @@
-# 🔍 Agent Typo & Grammar Checker
+# Agent Typo & Grammar Checker
 
 Program berbasis Python yang menggunakan **Groq API** untuk memeriksa dan memperbaiki teks berbahasa Indonesia secara otomatis — didukung model **Llama 3.3 70B**.
 

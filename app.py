@@ -1,20 +1,22 @@
 """
-Agent Typo & Grammar Checker
+Agent Typo & Grammar Checker — REST API Server
 Memperbaiki typo, ejaan, tanda baca, huruf kapital, spasi,
 dan konsistensi istilah pada teks berbahasa Indonesia.
 
-Backend: Groq API (gratis, cepat, tanpa kartu kredit)
+Backend : Groq API (llama-3.3-70b-versatile)
+Server  : FastAPI + Uvicorn
 """
 
 import os
-import sys
 import json
-import textwrap
-from groq import Groq
+from typing import Optional
 
-# Paksa stdout ke UTF-8 agar emoji tampil di terminal Windows
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+from groq import Groq
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import uvicorn
+
 
 # ── Konstanta ─────────────────────────────────────────────────────────────────
 
@@ -56,25 +58,77 @@ Pastikan JSON yang kamu kembalikan bisa di-parse tanpa error. Jangan tambahkan t
 di luar JSON.
 """.strip()
 
-MODEL_ID  = "llama-3.3-70b-versatile"
-SEPARATOR = "─" * 60
+MODEL_ID = "llama-3.3-70b-versatile"
 
 
-# ── Fungsi utama ───────────────────────────────────────────────────────────────
+# ── Pydantic Models ───────────────────────────────────────────────────────────
 
-def get_api_key() -> str:
-    """Membaca Groq API key dari environment variable."""
+class OrchestratorPayload(BaseModel):
+    raw_text: Optional[str] = None
+    url: Optional[str] = None
+    keyword: Optional[str] = None
+
+
+class OrchestratorRequest(BaseModel):
+    task_id: str
+    agent_type: str
+    payload: OrchestratorPayload
+
+
+class AgentSuccessData(BaseModel):
+    result: Optional[str] = None
+    file_url: Optional[str] = None
+
+
+class AgentSuccessResponse(BaseModel):
+    status: str = "success"
+    task_id: str
+    data: AgentSuccessData
+    message: str
+
+
+class AgentErrorResponse(BaseModel):
+    status: str = "error"
+    task_id: Optional[str] = None
+    data: Optional[dict] = None
+    message: str
+
+
+# ── FastAPI App ───────────────────────────────────────────────────────────────
+
+app = FastAPI(
+    title="Typo Checker Agent",
+    description="REST API Agent untuk memeriksa typo dan grammar Bahasa Indonesia.",
+    version="2.0.0",
+)
+
+# CORS Middleware
+CORS_ORIGINS = [
+    "https://jokitugas.bananaunion.web.id",
+    "http://localhost:3000",
+    "*",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# ── Helper ────────────────────────────────────────────────────────────────────
+
+def get_groq_client() -> Groq:
+    """Membuat instance Groq client dari environment variable."""
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise EnvironmentError(
-            "Environment variable GROQ_API_KEY tidak ditemukan.\n"
-            "Silakan set terlebih dahulu:\n"
-            "  Windows CMD  : set GROQ_API_KEY=gsk_...\n"
-            "  Windows PS   : $env:GROQ_API_KEY='gsk_...'\n"
-            "  Linux/macOS  : export GROQ_API_KEY=gsk_...\n\n"
+            "Environment variable GROQ_API_KEY tidak ditemukan. "
             "Dapatkan API key gratis di: https://console.groq.com"
         )
-    return api_key
+    return Groq(api_key=api_key)
 
 
 def check_and_fix(client: Groq, teks: str) -> dict:
@@ -97,97 +151,89 @@ def check_and_fix(client: Groq, teks: str) -> dict:
     return hasil
 
 
-def tampilkan_hasil(teks_asli: str, hasil: dict) -> None:
-    """Menampilkan hasil perbaikan ke terminal dengan format yang rapi."""
+# ── Endpoints ─────────────────────────────────────────────────────────────────
 
-    teks_diperbaiki  = hasil.get("teks_diperbaiki", "")
-    daftar_kesalahan = hasil.get("daftar_kesalahan", [])
-    ringkasan        = hasil.get("ringkasan", "")
-
-    print(f"\n{SEPARATOR}")
-    print("  HASIL PEMERIKSAAN TEKS")
-    print(SEPARATOR)
-
-    # ── Teks asli ──
-    print("\n📝  TEKS ASLI:")
-    print(textwrap.fill(teks_asli, width=70,
-                        initial_indent="    ", subsequent_indent="    "))
-
-    # ── Teks diperbaiki ──
-    print("\n✅  TEKS YANG DIPERBAIKI:")
-    print(textwrap.fill(teks_diperbaiki, width=70,
-                        initial_indent="    ", subsequent_indent="    "))
-
-    # ── Daftar kesalahan ──
-    print(f"\n🔍  DAFTAR KESALAHAN ({len(daftar_kesalahan)} ditemukan):")
-    if not daftar_kesalahan:
-        print("    Tidak ada kesalahan yang ditemukan.")
-    else:
-        for item in daftar_kesalahan:
-            print(
-                f"\n    [{item.get('no', '?')}] Jenis    : {item.get('jenis_kesalahan', '-')}\n"
-                f"        Asli      : \"{item.get('teks_asli', '-')}\"\n"
-                f"        Perbaikan : \"{item.get('perbaikan', '-')}\""
-            )
-
-    # ── Ringkasan ──
-    print(f"\n💡  RINGKASAN PERBAIKAN:")
-    print(textwrap.fill(ringkasan, width=70,
-                        initial_indent="    ", subsequent_indent="    "))
-
-    print(f"\n{SEPARATOR}\n")
+@app.get("/", summary="Health Check")
+def health_check():
+    """Endpoint untuk mengecek status agen."""
+    return {"status": "online", "agent": "typo_checker"}
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
+@app.post(
+    "/process",
+    response_model=AgentSuccessResponse,
+    summary="Proses Pemeriksaan Typo & Grammar",
+)
+def process(request: OrchestratorRequest):
+    """
+    Menerima request dari Orchestrator, memeriksa typo & grammar pada
+    `raw_text` menggunakan Groq API, dan mengembalikan teks yang telah
+    diperbaiki.
+    """
+    task_id = request.task_id
+    raw_text = request.payload.raw_text
 
-def main() -> None:
-    print("=" * 60)
-    print("   AGENT TYPO & GRAMMAR CHECKER — Bahasa Indonesia")
-    print("   (Powered by Groq + Llama 3.3 70B)")
-    print("=" * 60)
-    print("Ketik teks yang ingin diperiksa, lalu tekan Enter dua kali.")
-    print("Ketik 'keluar' atau 'exit' untuk mengakhiri program.\n")
+    # Validasi input
+    if not raw_text or not raw_text.strip():
+        raise HTTPException(
+            status_code=400,
+            detail=AgentErrorResponse(
+                status="error",
+                task_id=task_id,
+                data=None,
+                message="Field 'raw_text' tidak boleh kosong.",
+            ).model_dump(),
+        )
 
-    # Inisialisasi klien Groq (API key dibaca dari env variable)
+    # Proses dengan Groq API
     try:
-        api_key = get_api_key()
+        client = get_groq_client()
+        hasil = check_and_fix(client, raw_text.strip())
+        teks_diperbaiki = hasil.get("teks_diperbaiki", raw_text)
+
+        return AgentSuccessResponse(
+            status="success",
+            task_id=task_id,
+            data=AgentSuccessData(
+                result=teks_diperbaiki,
+                file_url=None,
+            ),
+            message="Pemeriksaan typo dan grammar berhasil diproses.",
+        )
+
     except EnvironmentError as e:
-        print(f"\n[ERROR] {e}")
-        return
+        raise HTTPException(
+            status_code=500,
+            detail=AgentErrorResponse(
+                status="error",
+                task_id=task_id,
+                data=None,
+                message=f"Konfigurasi server error: {str(e)}",
+            ).model_dump(),
+        )
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=500,
+            detail=AgentErrorResponse(
+                status="error",
+                task_id=task_id,
+                data=None,
+                message="Gagal mem-parse respons dari Groq API sebagai JSON.",
+            ).model_dump(),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=AgentErrorResponse(
+                status="error",
+                task_id=task_id,
+                data=None,
+                message=f"Terjadi kesalahan saat memproses: {str(e)}",
+            ).model_dump(),
+        )
 
-    client = Groq(api_key=api_key)
 
-    while True:
-        print("Masukkan teks (tekan Enter dua kali untuk submit):")
-        baris = []
-        try:
-            while True:
-                baris_input = input()
-                if baris_input.strip().lower() in ("keluar", "exit"):
-                    print("\nTerima kasih telah menggunakan Agent Typo & Grammar Checker. Sampai jumpa!")
-                    return
-                if baris_input == "" and baris:
-                    break           # baris kosong setelah ada isi → submit
-                if baris_input != "":
-                    baris.append(baris_input)
-        except (KeyboardInterrupt, EOFError):
-            print("\n\nProgram dihentikan.")
-            return
-
-        teks = "\n".join(baris).strip()
-        if not teks:
-            print("[INFO] Teks kosong, silakan coba lagi.\n")
-            continue
-
-        print("\n⏳  Memeriksa teks… (menghubungi Groq API)\n")
-        try:
-            hasil = check_and_fix(client, teks)
-            tampilkan_hasil(teks, hasil)
-        except json.JSONDecodeError:
-            print("[ERROR] Respons dari AI tidak dapat diparse sebagai JSON. Coba lagi.\n")
-        except Exception as e:
-            print(f"[ERROR] Terjadi kesalahan: {e}\n")
-
+# ── Entry Point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    main()
+    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
